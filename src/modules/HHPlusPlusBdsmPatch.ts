@@ -33,6 +33,8 @@ type HHPlusPlusBdsmPatch_configSchema = {
   ];
 };
 
+type ActivityBarDisplayType = "pop" | "activity";
+
 export default class HHPlusPlusBdsmPatch extends HHModule {
   readonly configSchema: HHModule_ConfigSchema = {
     baseKey: "hhPlusPlusBdsmPatch",
@@ -73,6 +75,16 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
       this._fixVillainFightSelectorGirlIcon();
     }
   }
+  private _getActivityBarDisplayType(
+    popRemainingTimeSec: number,
+    missionEndTime: number | null,
+    missionRemainingTimeSec: number,
+  ): ActivityBarDisplayType {
+    if (popRemainingTimeSec <= 0 || missionEndTime === null) {
+      return "pop";
+    }
+    return missionRemainingTimeSec < popRemainingTimeSec ? "activity" : "pop";
+  }
   private _addPoPBar() {
     let popRemainingTimeSec = 0,
       popDurationTimeSec = 1;
@@ -83,7 +95,7 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
     if (location.pathname !== "/activities.html") {
       const hhTrackedTimes = JSON.parse(localStorage.getItem("HHPlusPlusTrackedTimes") || "{}");
       if (hhTrackedTimes.pop && hhTrackedTimes.popDuration) {
-        popRemainingTimeSec = hhTrackedTimes.pop - server_now_ts;
+        popRemainingTimeSec = Math.max(0, hhTrackedTimes.pop - server_now_ts);
         popDurationTimeSec = hhTrackedTimes.popDuration || 1;
       }
     } else {
@@ -110,21 +122,21 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
 
     // Always show at least the PoP bar - don't return early
 
-    let displayRemainingTimeSec, displayDurationTimeSec, displayType: "pop" | "activity";
+    const displayType = this._getActivityBarDisplayType(
+      popRemainingTimeSec,
+      missionEndTime,
+      activityRemainingTimeSec,
+    );
+    let displayRemainingTimeSec, displayDurationTimeSec;
     let currentHref: string;
 
-    // Primary display is PoP, only show mission if it finishes sooner or if activity finished sooner but wasn't cleared
-    if (missionEndTime !== null && activityRemainingTimeSec < popRemainingTimeSec) {
-      // Mission finishes sooner than PoP
+    if (displayType === "activity") {
       displayRemainingTimeSec = activityRemainingTimeSec;
       displayDurationTimeSec = activityDurationTimeSec;
-      displayType = "activity";
       currentHref = shared.general.getDocumentHref("/activities.html?tab=missions");
     } else {
-      // Show PoP in all other cases (default behavior)
       displayRemainingTimeSec = popRemainingTimeSec;
       displayDurationTimeSec = popDurationTimeSec;
-      displayType = "pop";
       currentHref = shared.general.getDocumentHref("/activities.html?tab=pop");
     }
 
@@ -161,6 +173,7 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
         timeToFinish="${displayRemainingTimeSec}"
         popTimeToFinish="${popRemainingTimeSec}"
         activityTimeToFinish="${activityRemainingTimeSec}"
+        hasMission="${missionEndTime !== null}"
         displayType="${displayType}"
       >
         <svg class="sqol-activity-bar-ring" viewBox="0 0 ${size} ${size}">
@@ -192,8 +205,7 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
       ($scriptBoostStatus) => {
         $scriptBoostStatus.after($activityBar);
 
-        // Update tooltip every second
-        const updateTooltip = () => {
+        const updateActivityBar = () => {
           const hhTrackedTimesUpdated = JSON.parse(
             localStorage.getItem("HHPlusPlusTrackedTimes") || "{}",
           );
@@ -204,8 +216,10 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
           let activityTimeRemaining = 0;
 
           if (hhTrackedTimesUpdated.pop && hhTrackedTimesUpdated.popDuration) {
-            popTimeRemaining =
-              hhTrackedTimesUpdated.pop - server_now_ts + (DateNowInit - Date.now()) / 1000;
+            popTimeRemaining = Math.max(
+              0,
+              hhTrackedTimesUpdated.pop - server_now_ts + (DateNowInit - Date.now()) / 1000,
+            );
           }
 
           if (missionEndTimeUpdated !== null && missionDurationUpdated !== null) {
@@ -215,20 +229,16 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
             );
           }
 
-          // Determine which to show now (recheck every second)
-          let currentDisplayType: "pop" | "activity";
-          let newHref: string;
-
-          // Primary display is PoP, only show mission if it finishes sooner or if activity finished sooner but wasn't cleared
-          if (missionEndTimeUpdated !== null && activityTimeRemaining < popTimeRemaining) {
-            // Mission finishes sooner than PoP
-            currentDisplayType = "activity";
-            newHref = shared.general.getDocumentHref("/activities.html?tab=missions");
-          } else {
-            // Show PoP in all other cases (default behavior)
-            currentDisplayType = "pop";
-            newHref = shared.general.getDocumentHref("/activities.html?tab=pop");
-          }
+          const currentDisplayType = this._getActivityBarDisplayType(
+            popTimeRemaining,
+            missionEndTimeUpdated,
+            activityTimeRemaining,
+          );
+          const newHref = shared.general.getDocumentHref(
+            currentDisplayType === "activity"
+              ? "/activities.html?tab=missions"
+              : "/activities.html?tab=pop",
+          );
 
           // Update href if it changed
           $activityBar.attr("href", newHref);
@@ -246,7 +256,11 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
 
           $activityBar.attr("popTimeToFinish", popTimeRemaining);
           $activityBar.attr("activityTimeToFinish", activityTimeRemaining);
-          $activityBar.attr("timeToFinish", Math.min(popTimeRemaining, activityTimeRemaining));
+          $activityBar.attr("hasMission", String(missionEndTimeUpdated !== null));
+          $activityBar.attr(
+            "timeToFinish",
+            currentDisplayType === "pop" ? popTimeRemaining : activityTimeRemaining,
+          );
 
           // Update SVG progress ring
           let popDurationUpdated = 0;
@@ -286,7 +300,8 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
           }
         };
 
-        const tooltipInterval = setInterval(updateTooltip, 1000);
+        updateActivityBar();
+        setInterval(updateActivityBar, 1000);
       },
     );
     TooltipHook.getInstance_().addTooltipOverride_(
@@ -295,7 +310,7 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
       (currentTarget, tooltipElement) => {
         const popTime = Number($(currentTarget).attr("popTimeToFinish") || "0");
         const activityTime = Number($(currentTarget).attr("activityTimeToFinish") || "0");
-        console.log("Updating tooltip, popTime:", popTime, "activityTime:", activityTime);
+        const hasMission = $(currentTarget).attr("hasMission") === "true";
 
         const content: string[] = [];
 
@@ -304,9 +319,11 @@ export default class HHPlusPlusBdsmPatch extends HHModule {
           content.push(`<div class="activity-tooltip-item">PoP: ${timer}</div>`);
         }
 
-        if (activityTime > 0) {
+        if (hasMission && activityTime > 0) {
           const timer = shared.timer.buildTimer(activityTime, "", "mission-timer");
           content.push(`<div class="activity-tooltip-item">Mission: ${timer}</div>`);
+        } else if (hasMission) {
+          content.push(`<div class="activity-tooltip-item">Mission: Ready</div>`);
         }
 
         if (content.length === 0) {

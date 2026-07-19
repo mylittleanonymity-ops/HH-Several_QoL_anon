@@ -74,3 +74,15 @@ temp/
 
 # Yarn Integrity file
 .yarn-integrity
+
+.playwright-mcp/ 
+playwright-report/ 
+test-results/ 
+blob-report/ 
+playwright/.auth/ 
+.auth/ *.storage-state.json 
+.env.local
+graphify-out/
+.codex/
+docs/
+AGENTS.md
